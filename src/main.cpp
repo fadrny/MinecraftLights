@@ -5,18 +5,27 @@
 
 const char* ssid = "";
 const char* password = "";
-const char* url = "https://sandbox.fadrny.com/data.json"; // Změň na URL tvého JSON souboru
+const char* url = "https://sandbox.fadrny.com/data.json";
 
-#define NUM_LEDS 100 // Počet LED na jednom pásku
-#define NUM_STRIPS 4 // Počet pásků
-#define DATA_PIN_1 5 // Pin pro první pásek
-#define DATA_PIN_2 18 // Pin pro druhý pásek
-#define DATA_PIN_3 2 // Pin pro třetí pásek
-#define DATA_PIN_4 21 // Pin pro čtvrtý pásek
+const int TICK_SUNRISE_START = 22300;
+const int TICK_DAY_START = 0;
+const int TICK_NOON = 6000;
+const int TICK_SUNSET_START = 12000;
+const int TICK_NIGHT_START = 13700;
+const int TICK_MIDNIGHT = 18000;
+const int TICK_TOTAL = 24000;
+
+#define NUM_LEDS 100
+#define NUM_STRIPS 4
+#define DATA_PIN_1 5
+#define DATA_PIN_2 18
+#define DATA_PIN_3 2
+#define DATA_PIN_4 21
 
 CRGB leds[NUM_STRIPS][NUM_LEDS];
-void setAllLeds(CRGB color, int ticks);
+void setAllLeds(CRGB color, uint8_t brightness);
 CRGB getColorForTime(int ticks);
+uint8_t getBrightnessForTime(int ticks);
 
 void setup() {
   Serial.begin(115200);
@@ -28,7 +37,6 @@ void setup() {
   }
   Serial.println("Connected to WiFi");
 
-  // Inicializace LED pásků
   FastLED.addLeds<WS2812B, DATA_PIN_1, BGR>(leds[0], NUM_LEDS);
   FastLED.addLeds<WS2812B, DATA_PIN_2, BGR>(leds[1], NUM_LEDS);
   FastLED.addLeds<WS2812B, DATA_PIN_3, BGR>(leds[2], NUM_LEDS);
@@ -36,68 +44,86 @@ void setup() {
 }
 
 void loop() { 
-  if ((WiFi.status() == WL_CONNECTED)) { // Check WiFi connection status
+  if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    http.begin(url); // Specify the URL
-
+    http.begin(url);
     http.addHeader("Cache-Control", "no-cache");
-    int httpCode = http.GET(); // Make the request
+    int httpCode = http.GET();
 
-    if (httpCode > 0) { // Check for the returning code
+    if (httpCode > 0) {
       String payload = http.getString();
-      Serial.println(payload);
-
-      // Parse JSON
       StaticJsonDocument<200> doc;
       DeserializationError error = deserializeJson(doc, payload);
 
-      if (error) {
-        Serial.print("deserializeJson() failed: ");
-        Serial.println(error.c_str());
-        return;
+      if (!error) {
+        int arg0 = doc["arg0"];
+        Serial.print("Ticks: ");
+        Serial.print(arg0);
+        
+        CRGB color = getColorForTime(arg0);
+        uint8_t brightness = getBrightnessForTime(arg0);
+        
+        Serial.print(", Color: R=");
+        Serial.print(color.r);
+        Serial.print(" G=");
+        Serial.print(color.g);
+        Serial.print(" B=");
+        Serial.print(color.b);
+        Serial.print(", Brightness: ");
+        Serial.println(brightness);
+        
+        setAllLeds(color, brightness);
+      } else {
+        Serial.println("JSON parsing failed");
       }
-
-      // Předpokládejme, že JSON má klíč "arg0"
-      int arg0 = doc["arg0"];
-      Serial.println(arg0);
-
-      // Změna barvy na základě arg0
-      CRGB color = getColorForTime(arg0);
-      setAllLeds(color, arg0);
     } else {
-      Serial.println("Error on HTTP request");
+      Serial.println("HTTP request failed");
     }
-    http.end(); // Free resources
+    http.end();
   }
-  delay(500); // Wait for 0.5 seconds
+  delay(500);
 }
 
 CRGB getColorForTime(int ticks) {
-  if (ticks >= 0 && ticks < 3000) { // Ráno
-    return blend(CRGB::Orange, CRGB::White, map(ticks, 0, 3000, 0, 255));
-  } else if (ticks >= 3000 && ticks < 9000) { // Poledne
-    return CRGB::White;
-  } else if (ticks >= 9000 && ticks < 12000) { // Večer
-    return blend(CRGB::White, CRGB::Red, map(ticks, 9000, 12000, 0, 255));
-  } else { // Noc
-    return CRGB::Blue;
+
+  if (ticks >= 0 && ticks < 12000) { // Daytime
+    if (ticks < 6000) { // Morning
+      return blend(CRGB::LightSkyBlue, CRGB::FloralWhite, map(ticks, 0, 6000, 0, 255));
+    } else { // Afternoon
+      return blend(CRGB::FloralWhite, CRGB::LightSkyBlue, map(ticks, 6000, 12000, 0, 255));
+    }
+  } else if (ticks >= 12000 && ticks < 12500) { // Sunset
+    return blend(CRGB::LightSkyBlue, CRGB::OrangeRed, map(ticks, 12000, 12500, 0, 255));
+  } else if (ticks >= 12500 && ticks < 13000) { // Nightfall
+    return blend(CRGB::OrangeRed, CRGB::DarkBlue, map(ticks, 12500, 13000, 0, 255));
+  }   else if (ticks >= 13000 && ticks < 23000) { // Nighttime
+    return CRGB::DarkBlue;
+  } else { // Sunrise (23000-24000)
+    return blend(CRGB::DarkBlue, CRGB::LightSkyBlue, map(ticks, 23000, 24000, 0, 255));
   }
 }
 
-void setAllLeds(CRGB color, int ticks) {
+uint8_t getBrightnessForTime(int ticks) {
+  // Normalizace tiků na rozsah 0-24000
+  ticks = ticks % 24000;
+  
+  if (ticks >= 0 && ticks < 12000) { // Daytime
+    return 255;
+  } else if (ticks >= 12000 && ticks < 13000) { // Sunset
+    return map(ticks, 12000, 13000, 255, 64);
+  } else if (ticks >= 13000 && ticks < 23000) { // Nighttime
+    return 64;
+  } else { // Sunrise (23000-24000)
+    return map(ticks, 23000, 24000, 64, 255);
+  }
+}
+
+void setAllLeds(CRGB color, uint8_t brightness) {
   for (int i = 0; i < NUM_STRIPS; i++) {
     for (int j = 0; j < NUM_LEDS; j++) {
       leds[i][j] = color;
     }
   }
-
-  // Modulace jasu během noci
-  if (ticks >= 12000 && ticks < 18000) {
-    uint8_t brightness = map(ticks, 12000, 18000, 255, 128); // Sniž jas uprostřed noci
-    FastLED.setBrightness(brightness);
-  } else {
-    FastLED.setBrightness(255); // Plný jas během dne
-  }
-
+  FastLED.setBrightness(brightness);
   FastLED.show();
 }
